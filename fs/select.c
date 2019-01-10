@@ -134,8 +134,11 @@ void poll_freewait(struct poll_wqueues *pwq)
 {
 	struct poll_table_page * p = pwq->table;
 	int i;
+	// 从数组中取出poll_table_entry然后挨个调用free_poll_entry从队列释放
 	for (i = 0; i < pwq->inline_index; i++)
 		free_poll_entry(pwq->inline_entries + i);
+	
+	// 如果使用了申请的内存，则也要一一释放
 	while (p) {
 		struct poll_table_entry * entry;
 		struct poll_table_page *old;
@@ -216,16 +219,21 @@ static int pollwake(wait_queue_t *wait, unsigned mode, int sync, void *key)
 static void __pollwait(struct file *filp, wait_queue_head_t *wait_address,
 				poll_table *p)
 {
+	// 根据poll_table的指针取得外层对象poll_wqueues的指针
 	struct poll_wqueues *pwq = container_of(p, struct poll_wqueues, pt);
+	// 先从数组中inline_entries中取空闲的，如果用完了则申请新页存放
 	struct poll_table_entry *entry = poll_get_entry(pwq);
 	if (!entry)
 		return;
 	get_file(filp);
 	entry->filp = filp;
 	entry->wait_address = wait_address;
+	// 设置监听的类型=poll和读写
 	entry->key = p->key;
+	// 对wait_queue链表初始化，flags=0，唤醒func=pollwake
 	init_waitqueue_func_entry(&entry->wait, pollwake);
 	entry->wait.private = pwq;
+	// 加入到该设备的等待队列中
 	add_wait_queue(wait_address, &entry->wait);
 }
 
@@ -481,9 +489,12 @@ int do_select(int n, fd_set_bits *fds, struct timespec *end_time)
 				*rexp = res_ex;
 			cond_resched();
 		}
+		// 第一次完毕后如果任何一个事件都没有发生，也会置wait为NULL，防止下一次循环再一次设置等待队列
 		wait = NULL;
+		// 如果有事件发生，或者timeout都会退出循环
 		if (retval || timed_out || signal_pending(current))
 			break;
+		// 如果发生了错误则也退出
 		if (table.error) {
 			retval = table.error;
 			break;
@@ -499,6 +510,7 @@ int do_select(int n, fd_set_bits *fds, struct timespec *end_time)
 			to = &expire;
 		}
 
+		// 开始睡眠
 		if (!poll_schedule_timeout(&table, TASK_INTERRUPTIBLE,
 					   to, slack))
 			timed_out = 1;
